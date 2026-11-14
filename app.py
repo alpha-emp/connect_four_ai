@@ -15,8 +15,9 @@ except Exception as e:          # report the real cause through the API instead 
 
 app = Flask(__name__)
 
-PUBLIC      = os.path.join(ROOT, "public")
-GA_PATH     = os.path.join(ROOT, "models", "ga_weights.json")
+PUBLIC          = os.path.join(ROOT, "public")
+GA_WEIGHTS_FILE = os.path.join(ROOT, "models", "ga_weights.json")
+GA_PATH         = GA_WEIGHTS_FILE
 # Max search depth per algorithm (keeps pure-Python search within serverless time limits)
 MAX_DEPTH = {"Minimax": 4, "Alpha-Beta": 5, "Alpha-Beta + Move Ordering": 6,
              "Alpha-Beta + Move Ordering + TT": 6, "Iterative Deepening": 6, "Genetic (Tuned)": 5}
