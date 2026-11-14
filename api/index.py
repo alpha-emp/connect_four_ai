@@ -3,12 +3,36 @@ import os, sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-import numpy as np
 from flask import Flask, jsonify, request, send_from_directory
-from c4.engine import ROWS, COLS, PLAYER, AI, get_valid_locations, winning_move, is_draw, get_move
-from c4.dqn import NumpyDQN, dqn_move
+
+_import_error = None
+try:
+    import numpy as np
+    from c4.engine import ROWS, COLS, PLAYER, AI, get_valid_locations, winning_move, is_draw, get_move
+    from c4.dqn import NumpyDQN, dqn_move
+except Exception as e:          # report the real cause through the API instead of a blank 500
+    _import_error = f"{type(e).__name__}: {e}"
 
 app = Flask(__name__)
+
+
+def _ls(p):
+    try: return sorted(os.listdir(p))[:40]
+    except Exception as e: return str(e)
+
+
+@app.get("/api/health")
+def health():
+    return jsonify(python=sys.version, root=ROOT, root_files=_ls(ROOT), c4_files=_ls(os.path.join(ROOT, "c4")),
+                   model_files=_ls(os.path.join(ROOT, "models")), import_error=_import_error)
+
+
+@app.before_request
+def _guard():
+    if _import_error and request.path.startswith("/api/") and request.path != "/api/health":
+        return jsonify(error="Server failed to start: " + _import_error), 500
+
+
 PUBLIC = os.path.join(ROOT, "public")
 MODEL_PATH = os.path.join(ROOT, "models", "dqn_connect4.npz")
 MAX_DEPTH = {"Minimax": 4, "Alpha-Beta": 5}          # keeps pure-Python search within serverless time limits
