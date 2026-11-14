@@ -18,9 +18,11 @@ app = Flask(__name__)
 PUBLIC          = os.path.join(ROOT, "public")
 GA_WEIGHTS_FILE = os.path.join(ROOT, "models", "ga_weights.json")
 GA_PATH         = GA_WEIGHTS_FILE
-# Max search depth per algorithm (keeps pure-Python search within serverless time limits)
+# Max search depth per algorithm (keeps pure-Python search within serverless time limits).
+# For MCTS the "depth" is a strength level 1..10 (iterations = level * 500, capped at 2 s per move).
 MAX_DEPTH = {"Minimax": 4, "Alpha-Beta": 5, "Alpha-Beta + Move Ordering": 6,
-             "Alpha-Beta + Move Ordering + TT": 6, "Iterative Deepening": 6, "Genetic (Tuned)": 5}
+             "Alpha-Beta + Move Ordering + TT": 6, "Iterative Deepening": 6, "Genetic (Tuned)": 5,
+             "MCTS": 10}
 MODEL_FILES = {"DQN": "dqn_connect4.npz", "DQN v2": "dqn_connect4_v2.npz"}
 _models = {}                                         # name -> {"m": model or None, "error": str or None}
 _ga    = {"w": None, "meta": None, "error": None}
@@ -89,6 +91,8 @@ def agents():
         {"id": "Genetic (Tuned)", "label": "Genetic (Tuned weights)",
          "depth": MAX_DEPTH["Genetic (Tuned)"], "available": gw is not None,
          "info": _ga["meta"], "error": _ga["error"]},
+        {"id": "MCTS", "label": "MCTS (Monte Carlo Tree Search)",
+         "depth": MAX_DEPTH["MCTS"], "available": True},
         {"id": "DQN", "label": "Trained DQN", "depth": None, "available": m is not None,
          "info": m.meta if m else None},
         {"id": "DQN v2", "label": "Trained DQN v2 (4-in-a-row features)", "depth": None, "available": m2 is not None,
