@@ -1,89 +1,195 @@
 # Connect Four AI
 
-A Connect Four website with two modes:
+A Connect Four web app and AI playground built with Python and Flask. It includes several search-based agents, a genetic algorithm optimizer, and trained DQN models for playing against the computer or watching AIs battle each other.
 
-- **Human vs AI**: you pick one AI to play against.
-- **AI vs AI**: you pick two AIs and watch them play (Start, Pause, Next move, Reset).
+## Features
 
-Available AIs: Random, Minimax, Alpha-Beta, Alpha-Beta + Move Ordering, Alpha-Beta + Move Ordering + TT (transposition table), and two trained DQN (reinforcement learning) models, **DQN** and **DQN v2**.
+- Human vs AI mode
+- AI vs AI mode with start, pause, next-move, and reset controls
+- Multiple agents:
+  - Random
+  - Minimax
+  - Alpha-Beta
+  - Alpha-Beta + Move Ordering
+  - Alpha-Beta + Move Ordering + TT
+  - Iterative Deepening
+  - Genetic (Tuned) weights
+  - MCTS
+  - DQN and DQN v2
+- Stateless Flask API backend
+- Static HTML/JS frontend served from `public/`
+- Optional training scripts for DQN and genetic tuning
 
-## Project layout
+## Repository layout
 
+```text
+app.py                 Flask API and local entry point
+c4/
+  __init__.py           Package marker
+  engine.py             Core game logic, heuristics, and AI search algorithms
+  dqn.py                NumPy-based DQN inference and feature preprocessing
+public/index.html      Frontend UI (HTML/CSS/JS)
+models/                Trained model weights and GA output
+  ga_weights.json      Genetic algorithm tuned weights (created by ga_train.py)
+  dqn_connect4.npz      DQN v1 model for the web app
+  dqn_connect4_v2.npz  DQN v2 model for the web app
+requirements.txt       Runtime dependencies
+requirements-train.txt Training dependencies (adds PyTorch)
+dqn_train.py           DQN training, evaluation, export, and play scripts
+ga_train.py            Genetic algorithm tuning for Alpha-Beta weights
+test_new_algos.py      Experimental algorithm tests
+LICENSE                MIT license
+README.md              Project documentation
 ```
-app.py                 Flask API (also the Vercel entry point)
-dqn_train.py           DQN training, playing and export (needs PyTorch)
-c4/engine.py           Game rules, heuristic, Random / Minimax / Alpha-Beta variants
-c4/dqn.py              NumPy-only DQN inference + feature encoders (no PyTorch on the server)
-public/index.html      Frontend (HTML, CSS and JavaScript in one file)
-models/                Trained models (.pth for training, .npz for the website)
-requirements.txt       Website dependencies (flask, numpy)
-requirements-train.txt Training dependencies (adds torch)
-```
 
-The server is stateless: the browser sends the board and the chosen AI, and the API returns a column.
+## Requirements
 
-## Run the website locally
+Python 3.10+ is recommended.
 
-```
+Install runtime dependencies:
+
+```bash
 pip install -r requirements.txt
+```
+
+For DQN training, install the training stack:
+
+```bash
+pip install -r requirements-train.txt
+```
+
+## Run locally
+
+```bash
 python app.py
 ```
 
-Open http://localhost:5000.
+Then open:
 
-## The two DQN models
-
-| | DQN (v1) | DQN v2 |
-|---|---|---|
-| Inputs | 42 (the board) | 222 (board + 69 four-in-a-row windows + playable squares) |
-| Hidden layers | 128, 128 | 256, 256, 128 |
-| Website file | `models/dqn_connect4.npz` | `models/dqn_connect4_v2.npz` |
-
-The v2 inputs give the network the state of every possible four-in-a-row line, so it doesn't have to work out diagonals itself. The two models use separate files and never overwrite each other.
-
-## Train the DQN (learning mode)
-
-```
-pip install -r requirements-train.txt
-
-python dqn_train.py train --minutes 110 --episodes 1000000               # v1
-python dqn_train.py train --arch v2 --minutes 110 --episodes 1000000     # v2
-python dqn_train.py train --arch v2 --minutes 60 --episodes 1000000 --resume   # continue training
+```text
+http://localhost:5000
 ```
 
-- `--minutes` stops training after that time. Ctrl+C also saves safely.
-- Training opponents (default `--opponent mixed`): 30% self-play, 20% Alpha-Beta+MO+TT depth 1, 25% depth 2, 15% depth 3, 10% random. A single opponent can be chosen, for example `--opponent abtt3`.
-- Every `--eval-every` episodes (default 500) the model plays test games against Random and Alpha-Beta depth 1 and 2. The score is out of 3.00, and the best model is kept.
+The app serves the frontend at `/` and exposes the move API at `/api/ai_move` and health checks at `/api/health`.
 
-Files written to `models/` (v2 files have a `_v2` suffix):
+## Agent overview
 
-- `dqn_connect4.pth`: latest checkpoint, used by `--resume`
-- `dqn_connect4_best.pth`: best checkpoint by evaluation
-- `dqn_connect4.npz`: weights the website loads
+### Classical search agents
 
-## Play or test the DQN (play mode, no learning)
+Implemented in `c4/engine.py`:
 
+- Random
+- Minimax
+- Alpha-Beta pruning
+- Alpha-Beta with move ordering
+- Alpha-Beta with move ordering + transposition table
+- Iterative deepening
+- Genetic algorithm tuned heuristic weights
+- MCTS
+
+### Deep learning agents
+
+The project includes DQN support for Connect Four:
+
+- `DQN` (v1)
+- `DQN v2` (with 4-in-a-row feature windows)
+
+These models are loaded from `models/` and used by the Flask API for inference.
+
+## Genetic algorithm tuning
+
+The genetic algorithm trainer tunes the evaluation weights used by the weighted Alpha-Beta heuristic.
+
+Run training:
+
+```bash
+python ga_train.py
 ```
-python dqn_train.py play --opponent human                                         # you vs v1
-python dqn_train.py play --arch v2 --opponent alphabeta --depth 3 --games 50      # v2 vs Alpha-Beta depth 3
+
+Optional arguments:
+
+```bash
+python ga_train.py --pop 20 --gen 20 --games 12 --depth 3
 ```
 
-`--opponent` can be `human`, `random`, `minimax` or `alphabeta`. Colours alternate between games. To convert an existing checkpoint for the website: `python dqn_train.py export --arch v2 --model path/to/file.pth`.
+This produces:
 
-## Deploy on Vercel
+```text
+models/ga_weights.json
+```
 
-1. Train a model and commit the `.npz` file(s) in `models/`.
-2. Push the repo to GitHub.
-3. In Vercel, choose **Add New, then Project**, and import the repo. The Root Directory must be the folder that contains `app.py`. Leave the build settings empty.
-4. Deploy. Each `git push` redeploys automatically.
+The web app automatically loads these weights for the `Genetic (Tuned)` agent when available.
 
-Vercel installs only `requirements.txt`, so PyTorch is not needed on the server. Search depth is capped (Minimax 4, Alpha-Beta 5, the two faster variants 6) to stay within serverless time limits.
+## DQN training and export
 
-## Troubleshooting
+Train the original model:
 
-Open `https://YOUR-SITE.vercel.app/api/health`. It shows whether the server started, which files were deployed, and whether each DQN model loaded.
+```bash
+python dqn_train.py train --minutes 110 --episodes 1000000
+```
 
-- **"API problem" banner or HTTP 404:** the API isn't running. Check that `app.py` is in the repo root and the Vercel Root Directory is correct.
-- **`import_error` is not null:** a file is missing or outdated on GitHub. Check that `c4/__init__.py`, `c4/engine.py` and `c4/dqn.py` are committed with the latest code.
-- **A DQN option is greyed out:** its `.npz` file isn't in `models/` on GitHub, or `dqn_error` in `/api/health` explains why it failed to load.
-- **Changes don't appear after a push:** check that the newest deployment matches your latest commit, then redeploy without the build cache.
+Train the v2 architecture:
+
+```bash
+python dqn_train.py train --arch v2 --minutes 110 --episodes 1000000
+```
+
+Resume training:
+
+```bash
+python dqn_train.py train --arch v2 --minutes 60 --episodes 1000000 --resume
+```
+
+Play against a trained model:
+
+```bash
+python dqn_train.py play --opponent human
+python dqn_train.py play --arch v2 --opponent alphabeta --depth 3 --games 50
+```
+
+Export a trained checkpoint for web use:
+
+```bash
+python dqn_train.py export --arch v2 --model models/dqn_connect4_v2_best.pth
+```
+
+## Deployment
+
+This project is designed to deploy to Vercel.
+
+1. Ensure the project root contains `app.py`.
+2. Commit the required model files in `models/`.
+3. Push to GitHub.
+4. Import the repository in Vercel and set the root directory to the folder containing `app.py`.
+5. Deploy.
+
+Vercel installs only `requirements.txt`, so heavy training dependencies like PyTorch are not needed in production.
+
+## Health checks and troubleshooting
+
+Open the health endpoint after deployment:
+
+```text
+https://YOUR-SITE.vercel.app/api/health
+```
+
+This reports:
+
+- whether the Flask app booted correctly
+- files present in the root and `c4/`
+- model loading status
+- import errors
+
+Common problems:
+
+- `API problem` or HTTP 404: the server did not start or the Vercel root directory is incorrect
+- `import_error` is not null: required files are missing or outdated
+- a DQN option is disabled: the matching `.npz` file was not committed to `models/`
+
+## License
+
+This project is licensed under the MIT License. See `LICENSE` for details.
+
+## Notes
+
+This repository mixes classical game-search approaches with machine-learning-based play, making it useful both as a game demo and as a research/experimentation playground for Connect Four strategies.
