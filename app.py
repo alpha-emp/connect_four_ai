@@ -15,17 +15,35 @@ except Exception as e:          # report the real cause through the API instead 
 
 app = Flask(__name__)
 
+PUBLIC = os.path.join(ROOT, "public")
+# Max search depth per algorithm (keeps pure-Python search within serverless time limits)
+MAX_DEPTH = {"Minimax": 4, "Alpha-Beta": 5, "Alpha-Beta + Move Ordering": 6, "Alpha-Beta + Move Ordering + TT": 6}
+MODEL_FILES = {"DQN": "dqn_connect4.npz", "DQN v2": "dqn_connect4_v2.npz"}
+_models = {}                                         # name -> {"m": model or None, "error": str or None}
+
 
 def _ls(p):
     try: return sorted(os.listdir(p))[:40]
     except Exception as e: return str(e)
 
 
+def get_model(name="DQN"):
+    s = _models.setdefault(name, {"m": None, "error": None})
+    path = os.path.join(ROOT, "models", MODEL_FILES[name])
+    if s["m"] is None and os.path.isfile(path):
+        try:
+            s["m"] = NumpyDQN.load(path)
+        except Exception as e:
+            s["error"] = f"{type(e).__name__}: {e}"
+            print(f"Could not load {name} model:", s["error"])
+    return s["m"]
+
+
 @app.get("/api/health")
 def health():
     return jsonify(python=sys.version, root=ROOT, root_files=_ls(ROOT), c4_files=_ls(os.path.join(ROOT, "c4")),
                    model_files=_ls(os.path.join(ROOT, "models")), import_error=_import_error,
-                   dqn_loaded=get_model() is not None, dqn_error=_model["error"])
+                   dqn={n: {"loaded": get_model(n) is not None, "error": _models[n]["error"]} for n in MODEL_FILES})
 
 
 @app.before_request
@@ -34,26 +52,9 @@ def _guard():
         return jsonify(error="Server failed to start: " + _import_error), 500
 
 
-PUBLIC = os.path.join(ROOT, "public")
-MODEL_PATH = os.path.join(ROOT, "models", "dqn_connect4.npz")
-# Max search depth per algorithm (keeps pure-Python search within serverless time limits)
-MAX_DEPTH = {"Minimax": 4, "Alpha-Beta": 5, "Alpha-Beta + Move Ordering": 6, "Alpha-Beta + Move Ordering + TT": 6}
-_model = {"m": None, "error": None}
-
-
-def get_model():
-    if _model["m"] is None and os.path.isfile(MODEL_PATH):
-        try:
-            _model["m"] = NumpyDQN.load(MODEL_PATH)
-        except Exception as e:
-            _model["error"] = f"{type(e).__name__}: {e}"
-            print("Could not load DQN model:", _model["error"])
-    return _model["m"]
-
-
 @app.get("/api/agents")
 def agents():
-    m = get_model()
+    m, m2 = get_model("DQN"), get_model("DQN v2")
     return jsonify([
         {"id": "Random", "label": "Random", "depth": None, "available": True},
         {"id": "Minimax", "label": "Minimax", "depth": MAX_DEPTH["Minimax"], "available": True},
@@ -64,6 +65,8 @@ def agents():
          "depth": MAX_DEPTH["Alpha-Beta + Move Ordering + TT"], "available": True},
         {"id": "DQN", "label": "Trained DQN", "depth": None, "available": m is not None,
          "info": m.meta if m else None},
+        {"id": "DQN v2", "label": "Trained DQN v2 (4-in-a-row features)", "depth": None, "available": m2 is not None,
+         "info": m2.meta if m2 else None},
     ])
 
 
@@ -81,10 +84,10 @@ def ai_move():
     if winning_move(board, PLAYER) or winning_move(board, AI) or is_draw(board):
         return jsonify(error="The game is already over."), 400
     try:
-        if agent == "DQN":
-            m = get_model()
+        if agent in MODEL_FILES:
+            m = get_model(agent)
             if m is None:
-                return jsonify(error="No trained DQN model found. Run: python dqn_train.py train"), 503
+                return jsonify(error=f"No trained '{agent}' model file found in models/."), 503
             res = dqn_move(m, board, piece)
         elif agent in ALGORITHMS:
             res = get_move(board, piece, agent, max(1, min(depth, MAX_DEPTH.get(agent, depth))))
