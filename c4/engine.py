@@ -224,12 +224,107 @@ def _ab_weighted(board, depth, alpha, beta, maximizing, counter, w):
     return best, value
 
 
+# ---------------- MCTS (Monte Carlo Tree Search, UCT) ----------------
+MCTS_TIME_LIMIT = 2.0            # seconds: hard cap so a serverless request cannot run too long
+MCTS_ITER_PER_LEVEL = 500        # "depth" 1..10 from the UI is used as a strength level: iterations = level * 500
+
+class _MCTSNode:
+    __slots__ = ("parent", "move", "mover", "children", "untried", "wins", "visits", "outcome")
+    def __init__(self, parent, move, mover, untried, outcome=None):
+        self.parent, self.move, self.mover = parent, move, mover   # mover = who played `move` to reach this node
+        self.children, self.untried = [], untried
+        self.wins, self.visits, self.outcome = 0.0, 0, outcome     # outcome: None (ongoing) / winner / 0 (draw)
+
+def _wins_at(board, row, col, piece):
+    """Does the disc at (row, col) complete four in a row? Only checks lines through that cell (fast)."""
+    for dr, dc in ((0, 1), (1, 0), (1, 1), (-1, 1)):
+        n = 1
+        for s in (1, -1):
+            r, c = row + s * dr, col + s * dc
+            while 0 <= r < ROWS and 0 <= c < COLS and board[r][c] == piece:
+                n += 1
+                r += s * dr; c += s * dc
+        if n >= 4:
+            return True
+    return False
+
+def _mcts(board, iterations, time_limit, counter, c_uct=1.41):
+    """UCT search. The side to move is AI (board is normalised by get_move). Returns (column, win_rate_percent)."""
+    valid = get_valid_locations(board)
+    if len(valid) == 1:
+        return valid[0], 0.0
+    # Tactical shortcut: take an immediate win, otherwise block the opponent's immediate win.
+    for piece in (AI, PLAYER):
+        for col in valid:
+            row = get_next_open_row(board, col)
+            board[row][col] = piece
+            hit = _wins_at(board, row, col, piece)
+            board[row][col] = EMPTY
+            if hit:
+                return col, (100.0 if piece == AI else 0.0)
+
+    heights0 = [int((board[:, c] != EMPTY).sum()) for c in range(COLS)]
+    root = _MCTSNode(None, None, PLAYER, list(valid))              # PLAYER "just moved" -> AI moves at the root
+    deadline = time.perf_counter() + time_limit
+    for it in range(iterations):
+        if it % 16 == 0 and time.perf_counter() > deadline:
+            break
+        b, h, node = board.copy(), list(heights0), root
+        # 1. selection
+        while node.outcome is None and not node.untried and node.children:
+            log_n = math.log(node.visits)
+            node = max(node.children, key=lambda ch: ch.wins / ch.visits + c_uct * math.sqrt(log_n / ch.visits))
+            b[h[node.move]][node.move] = node.mover; h[node.move] += 1
+        # 2. expansion
+        if node.outcome is None and node.untried:
+            col = node.untried.pop(random.randrange(len(node.untried)))
+            mover = AI if node.mover == PLAYER else PLAYER
+            row = h[col]; b[row][col] = mover; h[col] += 1
+            if _wins_at(b, row, col, mover): outcome = mover
+            elif all(x >= ROWS for x in h): outcome = 0
+            else: outcome = None
+            child = _MCTSNode(node, col, mover, [] if outcome is not None else [c for c in range(COLS) if h[c] < ROWS], outcome)
+            node.children.append(child)
+            node = child
+        # 3. simulation (random playout that always takes an immediate win)
+        result = node.outcome
+        if result is None:
+            cur = AI if node.mover == PLAYER else PLAYER
+            while True:
+                cols = [c for c in range(COLS) if h[c] < ROWS]
+                if not cols:
+                    result = 0; break
+                pick, won = None, False
+                for c in cols:
+                    b[h[c]][c] = cur
+                    if _wins_at(b, h[c], c, cur):
+                        pick, won = c, True; break
+                    b[h[c]][c] = EMPTY
+                if not won:
+                    pick = random.choice(cols)
+                    b[h[pick]][pick] = cur
+                h[pick] += 1
+                if won:
+                    result = cur; break
+                cur = AI if cur == PLAYER else PLAYER
+        # 4. backpropagation (stats are from the view of the player who made each node's move)
+        while node is not None:
+            node.visits += 1
+            if result == node.mover: node.wins += 1.0
+            elif result == 0: node.wins += 0.5
+            node = node.parent
+        counter[0] += 1
+    best = max(root.children, key=lambda ch: ch.visits)
+    return best.move, round(100.0 * best.wins / best.visits, 1)
+
 ALGORITHMS = ("Random", "Minimax", "Alpha-Beta", "Alpha-Beta + Move Ordering",
-              "Alpha-Beta + Move Ordering + TT", "Iterative Deepening", "Genetic (Tuned)")
+              "Alpha-Beta + Move Ordering + TT", "Iterative Deepening", "Genetic (Tuned)", "MCTS")
 
 def get_move(board, piece, algorithm, depth=4, weights=None):
     """Move for either colour. Returns dict(column, score, nodes, time).
-    `weights` is required when algorithm == 'Genetic (Tuned)'."""
+    `weights` is required when algorithm == 'Genetic (Tuned)'.
+    For 'MCTS', `depth` (1..10) is a strength level: iterations = depth * MCTS_ITER_PER_LEVEL,
+    `score` is the estimated win rate (0-100) and `nodes` is the number of iterations run."""
     b = board.copy() if piece == AI else swap_perspective(board)
     counter, t0 = [0], time.perf_counter()
     if algorithm == "Random":
@@ -248,6 +343,8 @@ def get_move(board, piece, algorithm, depth=4, weights=None):
         if weights is None:
             raise ValueError("Genetic (Tuned) requires pre-trained weights. Run: python ga_train.py")
         col, score = _ab_weighted(b, depth, -math.inf, math.inf, True, counter, weights)
+    elif algorithm == "MCTS":
+        col, score = _mcts(b, max(1, depth) * MCTS_ITER_PER_LEVEL, MCTS_TIME_LIMIT, counter)
     else:
         raise ValueError(f"Unknown algorithm: {algorithm}")
     return {"column": col, "score": score, "nodes": counter[0], "time": time.perf_counter() - t0}
