@@ -76,7 +76,7 @@ function drop(col){const p=S.turn;let r=0;while(S.board[r][col])r++;S.board[r][c
 // who controls the side to move: null = human, else {name, depth}
 function agent(p){if(S.mode==="hva")return p===S.human?null:{name:$("ai1").value,depth:+$("d1").value};
  return p===1?{name:$("ai-red").value,depth:+$("dr").value}:{name:$("ai-yel").value,depth:+$("dy").value}}
-const label=a=>!a?"Human":(AG.find(x=>x.id===a.name)||{}).label+(a.depth&&["Minimax","Alpha-Beta"].includes(a.name)?` (depth ${a.depth})`:"");
+const label=a=>!a?"Human":(AG.find(x=>x.id===a.name)||{}).label+(a.depth&&(AG.find(x=>x.id===a.name)||{}).depth?` (depth ${a.depth})`:"");
 
 async function aiTurn(){
  if(S.over||S.busy)return true;const a=agent(S.turn);if(!a)return true;const gid=S.gid,p=S.turn;S.busy=true;S.notice="";render();let ok=true;
@@ -135,7 +135,7 @@ function setMode(m){$("tab-hva").classList.toggle("on",m==="hva");$("tab-ava").c
  $("board").innerHTML=Array.from({length:R*C},(_,i)=>`<div class="cell" data-c="${i%C}"></div>`).join("");
  [...$("board").children].forEach(el=>el.onclick=()=>humanClick(+el.dataset.c));
  try{const r=await fetch("/api/agents");const j=await r.json().catch(()=>null);if(!r.ok||!Array.isArray(j))throw new Error((j&&j.error)||"API returned HTTP "+r.status+" (open /api/health to see why)");AG=j}
- catch(e){AG=[{id:"Random",label:"Random",available:true},{id:"Minimax",label:"Minimax",depth:4,available:true},{id:"Alpha-Beta",label:"Alpha-Beta",depth:5,available:true},{id:"DQN",label:"Trained DQN",available:false}];S.notice="API problem: "+e.message}
+ catch(e){AG=[{id:"Random",label:"Random",available:true},{id:"Minimax",label:"Minimax",depth:4,available:true},{id:"Alpha-Beta",label:"Alpha-Beta",depth:5,available:true},{id:"Alpha-Beta + Move Ordering",label:"Alpha-Beta + Move Ordering",depth:6,available:true},{id:"Alpha-Beta + Move Ordering + TT",label:"Alpha-Beta + Move Ordering + TT",depth:6,available:true},{id:"DQN",label:"Trained DQN",available:false}];S.notice="API problem: "+e.message}
  fillSelects();
  $("tab-hva").onclick=()=>setMode("hva");$("tab-ava").onclick=()=>setMode("ava");
  $("new-hva").onclick=startHva;$("undo").onclick=undo;
