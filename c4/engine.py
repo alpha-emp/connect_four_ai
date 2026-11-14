@@ -104,6 +104,48 @@ def _search(board, depth, alpha, beta, maximizing, counter, prune):
             if alpha >= beta: break
     return best, value
 
+# ---- Alpha-Beta variants: move ordering, and move ordering + transposition table ----
+CENTER_ORDER = sorted(range(COLS), key=lambda c: abs(c - COLS // 2))      # [3, 2, 4, 1, 5, 0, 6]
+EXACT, LOWER, UPPER = 0, 1, 2
+
+def _search_ordered(board, depth, alpha, beta, maximizing, counter, tt):
+    """Alpha-Beta trying centre columns first. If `tt` (a dict) is given, also uses a transposition table."""
+    counter[0] += 1
+    alpha0, key, tt_col = alpha, None, None
+    if tt is not None:
+        key = (board.tobytes(), depth, maximizing)
+        hit = tt.get(key)
+        if hit:
+            val, flag, tt_col = hit
+            if flag == EXACT: return tt_col, val
+            if flag == LOWER: alpha = max(alpha, val)
+            else: beta = min(beta, val)
+            if alpha >= beta: return tt_col, val
+    valid = get_valid_locations(board)
+    if winning_move(board, AI): return None, WIN_SCORE
+    if winning_move(board, PLAYER): return None, -WIN_SCORE
+    if not valid: return None, 0
+    if depth == 0: return None, score_position(board, AI)
+    order = [c for c in CENTER_ORDER if c in valid]
+    if tt_col in order:                                   # best move from an earlier visit goes first
+        order.remove(tt_col); order.insert(0, tt_col)
+    piece = AI if maximizing else PLAYER
+    value, best = (-math.inf if maximizing else math.inf), order[0]
+    for col in order:
+        child = board.copy()
+        drop_piece(child, get_next_open_row(child, col), col, piece)
+        s = _search_ordered(child, depth - 1, alpha, beta, not maximizing, counter, tt)[1]
+        if maximizing and s > value: value, best = s, col
+        if not maximizing and s < value: value, best = s, col
+        if maximizing: alpha = max(alpha, value)
+        else: beta = min(beta, value)
+        if alpha >= beta: break
+    if tt is not None:
+        tt[key] = (value, UPPER if value <= alpha0 else LOWER if value >= beta else EXACT, best)
+    return best, value
+
+ALGORITHMS = ("Random", "Minimax", "Alpha-Beta", "Alpha-Beta + Move Ordering", "Alpha-Beta + Move Ordering + TT")
+
 def get_move(board, piece, algorithm, depth=4):
     """Move for either colour. Returns dict(column, score, nodes, time)."""
     b = board.copy() if piece == AI else swap_perspective(board)
@@ -114,6 +156,10 @@ def get_move(board, piece, algorithm, depth=4):
         col, score = _search(b, depth, -math.inf, math.inf, True, counter, False)
     elif algorithm == "Alpha-Beta":
         col, score = _search(b, depth, -math.inf, math.inf, True, counter, True)
+    elif algorithm == "Alpha-Beta + Move Ordering":
+        col, score = _search_ordered(b, depth, -math.inf, math.inf, True, counter, None)
+    elif algorithm == "Alpha-Beta + Move Ordering + TT":
+        col, score = _search_ordered(b, depth, -math.inf, math.inf, True, counter, {})
     else:
         raise ValueError(f"Unknown algorithm: {algorithm}")
     return {"column": col, "score": score, "nodes": counter[0], "time": time.perf_counter() - t0}
