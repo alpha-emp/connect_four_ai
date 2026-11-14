@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect Four AI</title>
+<style>
+:root{--bg:#f4f6fb;--card:#fff;--fg:#111827;--mut:#6b7280;--line:#d8dde8;--blue:#2563eb;--blue2:#1e3a8a;--hole:#e8eefc;--red:#e11d48;--yel:#facc15}
+@media(prefers-color-scheme:dark){:root{--bg:#0f172a;--card:#1e293b;--fg:#f1f5f9;--mut:#94a3b8;--line:#334155;--hole:#0f172a}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,sans-serif}
+main{max-width:980px;margin:0 auto;padding:16px}h1{text-align:center;margin:8px 0 2px}.sub{text-align:center;color:var(--mut);margin:0 0 14px}
+.tabs{display:flex;gap:8px;max-width:420px;margin:0 auto 16px}.tabs button{flex:1;padding:12px;font-weight:700;border:2px solid var(--line);background:var(--card);color:var(--fg);border-radius:12px;cursor:pointer}
+.tabs button.on{border-color:var(--blue);background:var(--blue);color:#fff}
+.grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:16px}@media(max-width:760px){.grid{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
+label{display:block;font-weight:600;margin:10px 0 4px;font-size:.9rem}select,input[type=range]{width:100%}select{padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+.btn{padding:9px 14px;border-radius:9px;border:1px solid var(--line);background:var(--card);color:var(--fg);font-weight:600;cursor:pointer}.btn.p{background:var(--blue);border-color:var(--blue);color:#fff}.btn:disabled{opacity:.45;cursor:not-allowed}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.hide{display:none!important}
+#status{display:flex;align-items:center;justify-content:center;gap:10px;font-weight:700;font-size:1.1rem;padding:10px;margin-bottom:10px;border-radius:12px;border:1px solid var(--line);background:var(--card)}
+#status.win{border-color:#16a34a}.dot{width:18px;height:18px;border-radius:50%}.dot.r{background:var(--red)}.dot.y{background:var(--yel)}
+#notice{color:#92400e;background:#fef3c7;border:1px solid #f59e0b;border-radius:10px;padding:8px 12px;margin-bottom:10px}
+.wrap{max-width:520px;margin:0 auto}#cols,#board{display:grid;grid-template-columns:repeat(7,1fr);gap:clamp(4px,1.3vw,9px)}
+#cols{padding:0 clamp(6px,2vw,14px);margin-bottom:6px}#cols button{padding:6px 0;font-weight:700;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}#cols button:disabled{opacity:.3;cursor:default}
+#board{padding:clamp(6px,2vw,14px);background:linear-gradient(180deg,var(--blue),var(--blue2));border-radius:18px;box-shadow:0 10px 24px rgba(0,0,0,.3)}
+.cell{aspect-ratio:1;border-radius:50%;background:var(--hole);position:relative;box-shadow:inset 0 4px 8px rgba(0,0,0,.45);cursor:pointer}
+.disc{position:absolute;inset:5%;border-radius:50%}.disc.r{background:radial-gradient(circle at 35% 30%,#fb7185,var(--red) 58%,#9f1239)}.disc.y{background:radial-gradient(circle at 35% 30%,#fde68a,var(--yel) 55%,#eab308)}
+.disc.last{animation:drop .4s cubic-bezier(.3,.7,.4,1) both}.disc.w{outline:4px solid #fff;outline-offset:-2px}
+@keyframes drop{from{transform:translateY(calc(var(--d,3)*-108%))}to{transform:none}}@media(prefers-reduced-motion:reduce){.disc.last{animation:none}}
+table{width:100%;border-collapse:collapse;font-size:.9rem}td{padding:4px 6px;border-bottom:1px solid var(--line)}td:first-child{font-weight:600;color:var(--mut);white-space:nowrap}
+.q{display:inline-block;padding:1px 6px;margin:1px;border-radius:6px;background:rgba(127,127,127,.2);font-size:.8rem}.q.b{background:#16a34a;color:#fff}
+</style>
+</head>
+<body>
+<main>
+<h1>Connect Four AI</h1>
+<p class="sub">Red moves first. Pick a mode, choose your AI model(s), and play.</p>
+<div class="tabs"><button id="tab-hva" class="on">Human vs AI</button><button id="tab-ava">AI vs AI</button></div>
+<div class="grid">
+ <section>
+  <div id="status"></div><div id="notice" class="hide"></div>
+  <div class="wrap"><div id="cols"></div><div id="board" role="grid" aria-label="Connect Four board"></div></div>
+ </section>
+ <aside>
+  <div class="card">
+   <div id="hva-box">
+    <label for="ai1">AI model</label><select id="ai1"></select>
+    <div id="d1-box"><label>Search depth: <span id="d1-v">3</span></label><input type="range" id="d1" min="1" max="5" value="3"></div>
+    <label for="color">You play as</label><select id="color"><option value="1">Red (moves first)</option><option value="2">Yellow (moves second)</option></select>
+    <div class="row"><button class="btn p" id="new-hva">New game</button><button class="btn" id="undo">Undo move</button></div>
+   </div>
+   <div id="ava-box" class="hide">
+    <label for="ai-red">Red AI (moves first)</label><select id="ai-red"></select>
+    <div id="dr-box"><label>Red depth: <span id="dr-v">3</span></label><input type="range" id="dr" min="1" max="5" value="3"></div>
+    <label for="ai-yel">Yellow AI</label><select id="ai-yel"></select>
+    <div id="dy-box"><label>Yellow depth: <span id="dy-v">3</span></label><input type="range" id="dy" min="1" max="5" value="3"></div>
+    <label for="speed">Delay between moves</label><select id="speed"><option value="1200">Slow</option><option value="600" selected>Normal</option><option value="150">Fast</option></select>
+    <div class="row"><button class="btn p" id="start">Start</button><button class="btn" id="pause">Pause</button><button class="btn" id="step">Next move</button><button class="btn" id="reset">Reset</button></div>
+   </div>
+  </div>
+  <div class="card" style="margin-top:12px"><b>Game information</b><div id="info"></div></div>
+ </aside>
+</div>
+</main>
+<script>
+const R=6,C=7,$=id=>document.getElementById(id);
+let AG=[],S={};
+const nm=p=>p===1?"Red":"Yellow", other=p=>p===1?2:1, sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function fresh(){S={...S,board:Array.from({length:R},()=>Array(C).fill(0)),turn:1,hist:[],over:false,winner:null,win:[],busy:false,auto:false,gid:(S.gid||0)+1,notice:"",info:null}}
+function findWin(b,p){for(let r=0;r<R;r++)for(let c=0;c<C;c++)for(const[dr,dc]of[[0,1],[1,0],[1,1],[-1,1]]){const cells=[0,1,2,3].map(i=>[r+i*dr,c+i*dc]);if(cells.every(([y,x])=>y>=0&&y<R&&x>=0&&x<C&&b[y][x]===p))return cells}return[]}
+const valid=()=>[...Array(C).keys()].filter(c=>S.board[R-1][c]===0);
+function drop(col){const p=S.turn;let r=0;while(S.board[r][col])r++;S.board[r][col]=p;S.hist.push([col,r,p]);
+ const w=findWin(S.board,p);if(w.length){S.over=true;S.winner=p;S.win=w}else if(!valid().length){S.over=true;S.winner=0}else S.turn=other(p)}
+
+// who controls the side to move: null = human, else {name, depth}
+function agent(p){if(S.mode==="hva")return p===S.human?null:{name:$("ai1").value,depth:+$("d1").value};
+ return p===1?{name:$("ai-red").value,depth:+$("dr").value}:{name:$("ai-yel").value,depth:+$("dy").value}}
+const label=a=>!a?"Human":(AG.find(x=>x.id===a.name)||{}).label+(a.depth&&["Minimax","Alpha-Beta"].includes(a.name)?` (depth ${a.depth})`:"");
+
+async function aiTurn(){
+ if(S.over||S.busy)return true;const a=agent(S.turn);if(!a)return true;const gid=S.gid,p=S.turn;S.busy=true;S.notice="";render();let ok=true;
+ try{const r=await fetch("/api/ai_move",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({board:S.board,piece:p,agent:a.name,depth:a.depth})});
+  const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||"Server error "+r.status);
+  if(gid!==S.gid)return true;drop(j.column);S.info={...j,piece:p}}
+ catch(e){ok=false;S.notice=e.message;S.auto=false}
+ finally{if(gid===S.gid)S.busy=false;render()}
+ return ok}
+async function humanClick(c){
+ if(S.mode!=="hva"||S.over||S.busy||S.turn!==S.human||!valid().includes(c))return;
+ S.notice="";drop(c);render();if(!S.over)await aiTurn()}
+async function autoplay(){
+ if(S.mode!=="ava"||S.over||S.auto)return;S.auto=true;const gid=S.gid;render();
+ while(S.auto&&!S.over&&gid===S.gid){if(!await aiTurn())break;if(S.over)break;await sleep(+$("speed").value)}
+ if(gid===S.gid)S.auto=false;render()}
+
+function startHva(){S.mode="hva";S.human=+$("color").value;fresh();render();if(S.turn!==S.human)aiTurn()}
+function resetAva(){S.mode="ava";fresh();render()}
+function undo(){if(S.busy||S.mode!=="hva")return;const h=S.hist;let k=0;for(let i=1;i<=h.length;i++)if(h[h.length-i][2]===S.human){k=i;break}
+ if(!k){S.notice="Nothing to undo.";return render()}
+ for(let i=0;i<k;i++){const[c,r,p]=h.pop();S.board[r][c]=0;S.turn=p}S.over=false;S.winner=null;S.win=[];S.info=null;S.notice="";S.gid++;render()}
+
+function render(){
+ const humanTurn=S.mode==="hva"&&!S.over&&!S.busy&&S.turn===S.human, ok=valid();
+ [...$("cols").children].forEach((b,c)=>b.disabled=!(humanTurn&&ok.includes(c)));
+ const cells=$("board").children,last=S.hist.length?S.hist[S.hist.length-1]:null,win=new Set(S.win.map(x=>x.join()));
+ for(let r=R-1,i=0;r>=0;r--)for(let c=0;c<C;c++,i++){const v=S.board[r][c],el=cells[i];
+  el.innerHTML=v?`<div class="disc ${v===1?"r":"y"}${last&&last[0]===c&&last[1]===r?" last":""}${win.has([r,c].join())?" w":""}" style="--d:${R-r}"></div>`:""}
+ let dot="",txt="";
+ if(S.over)txt=S.winner===0?"Draw - the board is full.":S.mode==="hva"?(S.winner===S.human?"You win!":`${nm(S.winner)} wins - ${label(agent(S.winner))}.`):`${nm(S.winner)} wins - ${label(agent(S.winner))}.`;
+ else if(S.busy)txt=`${nm(S.turn)} (${label(agent(S.turn))}) is thinking...`;
+ else{dot=S.turn===1?"r":"y";txt=S.mode==="hva"?(S.turn===S.human?`Your turn (${nm(S.turn)})`:`${nm(S.turn)} (AI) to move`):`${nm(S.turn)} to move (${label(agent(S.turn))})`}
+ $("status").className=S.over&&S.winner?"win":"";$("status").innerHTML=(dot?`<span class="dot ${dot}"></span>`:"")+`<span>${esc(txt)}</span>`;
+ $("notice").classList.toggle("hide",!S.notice);$("notice").textContent=S.notice||"";
+ $("start").disabled=S.auto||S.over||S.busy;$("pause").disabled=!S.auto;$("step").disabled=S.auto||S.over||S.busy;
+ let rows=[["Moves played",S.hist.length]];const i=S.info;
+ if(i){rows.push(["Last AI move",`${nm(i.piece)} - ${esc(label({name:i.agent,depth:i.depth}))}: column ${i.column+1}`]);
+  if(i.score!=null)rows.push(["Evaluation",i.score]);if(i.nodes)rows.push(["Nodes explored",i.nodes.toLocaleString()]);
+  rows.push(["Thinking time",i.time.toFixed(4)+" s"]);
+  if(i.q_values)rows.push(["DQN Q-values",i.q_values.map((q,c)=>`<span class="q${c===i.column?" b":""}">${c+1}: ${i.valid.includes(c)?q.toFixed(2):"full"}</span>`).join("")])}
+ $("info").innerHTML="<table>"+rows.map(([a,b])=>`<tr><td>${a}</td><td>${b}</td></tr>`).join("")+"</table>"}
+
+function fillSelects(){
+ for(const id of["ai1","ai-red","ai-yel"]){const s=$(id);s.innerHTML=AG.map(a=>`<option value="${a.id}" ${a.available?"":"disabled"}>${a.label}${a.available?"":" (not trained yet)"}</option>`).join("")}
+ $("ai1").value="Alpha-Beta";$("ai-red").value="Alpha-Beta";$("ai-yel").value="Minimax";
+ for(const[sel,box,rng,val]of[["ai1","d1-box","d1","d1-v"],["ai-red","dr-box","dr","dr-v"],["ai-yel","dy-box","dy","dy-v"]]){
+  const sync=()=>{const a=AG.find(x=>x.id===$(sel).value);$(box).classList.toggle("hide",!a||!a.depth);if(a&&a.depth){$(rng).max=a.depth;if(+$(rng).value>a.depth)$(rng).value=a.depth}$(val).textContent=$(rng).value};
+  $(sel).onchange=sync;$(rng).oninput=sync;sync()}}
+function setMode(m){$("tab-hva").classList.toggle("on",m==="hva");$("tab-ava").classList.toggle("on",m==="ava");
+ $("hva-box").classList.toggle("hide",m!=="hva");$("ava-box").classList.toggle("hide",m!=="ava");S.auto=false;m==="hva"?startHva():resetAva()}
+
+(async function init(){
+ $("cols").innerHTML=[...Array(C).keys()].map(c=>`<button aria-label="Drop in column ${c+1}">▼ ${c+1}</button>`).join("");
+ [...$("cols").children].forEach((b,c)=>b.onclick=()=>humanClick(c));
+ $("board").innerHTML=Array.from({length:R*C},(_,i)=>`<div class="cell" data-c="${i%C}"></div>`).join("");
+ [...$("board").children].forEach(el=>el.onclick=()=>humanClick(+el.dataset.c));
+ try{AG=await (await fetch("/api/agents")).json()}catch(e){AG=[{id:"Random",label:"Random",available:true},{id:"DQN",label:"Trained DQN",available:false}];S.notice="Could not reach the API."}
+ fillSelects();
+ $("tab-hva").onclick=()=>setMode("hva");$("tab-ava").onclick=()=>setMode("ava");
+ $("new-hva").onclick=startHva;$("undo").onclick=undo;
+ $("start").onclick=autoplay;$("pause").onclick=()=>{S.auto=false;render()};$("step").onclick=()=>aiTurn();$("reset").onclick=resetAva;
+ const n=S.notice;setMode("hva");if(n){S.notice=n;render()}})();
+</script>
+</body>
+</html>
