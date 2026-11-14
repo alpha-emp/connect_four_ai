@@ -105,7 +105,8 @@ function render(){
  [...$("cols").children].forEach((b,c)=>b.disabled=!(humanTurn&&ok.includes(c)));
  const cells=$("board").children,last=S.hist.length?S.hist[S.hist.length-1]:null,win=new Set(S.win.map(x=>x.join()));
  for(let r=R-1,i=0;r>=0;r--)for(let c=0;c<C;c++,i++){const v=S.board[r][c],el=cells[i];
-  el.innerHTML=v?`<div class="disc ${v===1?"r":"y"}${last&&last[0]===c&&last[1]===r?" last":""}${win.has([r,c].join())?" w":""}" style="--d:${R-r}"></div>`:""}
+  if(el.dataset.v!==String(v)){el.dataset.v=v;el.innerHTML=v?`<div class="disc ${v===1?"r":"y"}${last&&last[0]===c&&last[1]===r?" last":""}" style="--d:${R-r}"></div>`:""}
+  const d=el.firstChild;if(d){if(!(last&&last[0]===c&&last[1]===r))d.classList.remove("last");d.classList.toggle("w",win.has([r,c].join()))}}
  let dot="",txt="";
  if(S.over)txt=S.winner===0?"Draw - the board is full.":S.mode==="hva"?(S.winner===S.human?"You win!":`${nm(S.winner)} wins - ${label(agent(S.winner))}.`):`${nm(S.winner)} wins - ${label(agent(S.winner))}.`;
  else if(S.busy)txt=`${nm(S.turn)} (${label(agent(S.turn))}) is thinking...`;
