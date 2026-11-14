@@ -30,6 +30,8 @@ WEB = f"{MODEL_DIR}/dqn_connect4.npz"
 
 GAMMA, EPS_START, EPS_MIN, EPS_DECAY = 0.99, 1.0, 0.05, 0.9995   # epsilon decays per episode
 BATCH, WARMUP, LR, TARGET_UPDATE, MEMORY = 64, 1000, 1e-3, 500, 50000
+# Training opponent mix (used by --opponent mixed): self-play + Alpha-Beta/Move Ordering/TT at depth 1-3 + random
+MIX = (("self", 0.30), ("abtt1", 0.20), ("abtt2", 0.25), ("abtt3", 0.15), ("random", 0.10))
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Two model architectures. v2 gets explicit 4-in-a-row window features and a deeper network.
@@ -178,6 +180,9 @@ def make_opponent(kind, trainer):
     if kind.startswith("alphabeta"):
         depth = int(kind[9:] or 1)
         return lambda b, p: get_move(b, p, "Alpha-Beta", depth)["column"]
+    if kind.startswith("abtt"):                    # Alpha-Beta + Move Ordering + TT, e.g. abtt3 = depth 3
+        depth = int(kind[4:] or 1)
+        return lambda b, p: get_move(b, p, "Alpha-Beta + Move Ordering + TT", depth)["column"]
     if kind == "self":
         return lambda b, p: greedy_action(trainer.target, b, p, 0.1)
     raise SystemExit(f"Unknown opponent '{kind}'")
@@ -262,9 +267,7 @@ def cmd_train(a):
             if a.minutes and time.time() - t0 > a.minutes * 60:
                 print(f"Time limit of {a.minutes} minutes reached - stopping.")
                 break
-            kind = a.opponent if a.opponent != "mixed" else random.choices(
-                ["random", "self", "alphabeta1", "alphabeta2"],
-                [0.15, 0.35, 0.25, 0.25])[0]
+            kind = a.opponent if a.opponent != "mixed" else random.choices(*zip(*MIX))[0]
             run_episode(tr, make_opponent(kind, tr))
             tr.eps, tr.episodes = max(EPS_MIN, tr.eps * EPS_DECAY), tr.episodes + 1
             if i % a.eval_every == 0:
@@ -330,7 +333,7 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
     t = sub.add_parser("train", help="learning mode")
     t.add_argument("--episodes", type=int, default=5000)
-    t.add_argument("--opponent", default="mixed", help="mixed | random | self | alphabeta1..4")
+    t.add_argument("--opponent", default="mixed", help="mixed | random | self | alphabeta1..4 | abtt1..abtt4 (AB + Move Ordering + TT)")
     t.add_argument("--resume", action="store_true")
     t.add_argument("--resume-eps", type=float, default=0.30, help="min epsilon when resuming to allow exploration")
     t.add_argument("--minutes", type=float, default=None, help="stop training after this many minutes")
