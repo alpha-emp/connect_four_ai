@@ -6,6 +6,8 @@
   python dqn_train.py play --opponent human            # MODE 2: plays only (greedy, no learning)
   python dqn_train.py play --opponent alphabeta --depth 2 --games 20
   python dqn_train.py export                           # .pth -> models/dqn_connect4.npz (used by the website)
+  python dqn_train.py train --arch v2 --minutes 110    # NEW model: files get a _v2 suffix (dqn_connect4_v2.*)
+  (--arch v2 also works with play and export)
 
 Files written to models/:
   dqn_connect4.pth       latest checkpoint (resume training from this)
@@ -19,7 +21,7 @@ import torch, torch.nn as nn, torch.optim as optim
 
 from c4.engine import (ROWS, COLS, PLAYER, AI, create_board, get_valid_locations, make_move,
                        winning_move, is_draw, get_move, random_ai_move)
-from c4.dqn import encode_state
+from c4.dqn import encode_state, encode_state_v2, N_FEATURES_V2
 
 MODEL_DIR = "models"
 LATEST = f"{MODEL_DIR}/dqn_connect4.pth"
@@ -30,13 +32,29 @@ GAMMA, EPS_START, EPS_MIN, EPS_DECAY = 0.99, 1.0, 0.05, 0.9995   # epsilon decay
 BATCH, WARMUP, LR, TARGET_UPDATE, MEMORY = 64, 1000, 1e-3, 500, 50000
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# Two model architectures. v2 gets explicit 4-in-a-row window features and a deeper network.
+ARCHS = {"v1": dict(n_in=ROWS * COLS, hidden=(128, 128), encode=encode_state, suffix=""),
+         "v2": dict(n_in=N_FEATURES_V2, hidden=(256, 256, 128), encode=encode_state_v2, suffix="_v2")}
+CFG = ARCHS["v1"]
 
-class DQN(nn.Module):                      # same architecture as the notebook
+
+def use_arch(name):
+    """Select the architecture and its own model files (v1 files are never touched when using v2)."""
+    global CFG, LATEST, BEST, WEB
+    CFG = ARCHS[name]
+    s = CFG["suffix"]
+    LATEST, BEST, WEB = (f"{MODEL_DIR}/dqn_connect4{s}.pth", f"{MODEL_DIR}/dqn_connect4{s}_best.pth",
+                         f"{MODEL_DIR}/dqn_connect4{s}.npz")
+
+
+class DQN(nn.Module):                      # v1 = 42-128-128-7 (as the notebook); v2 = 222-256-256-128-7
     def __init__(self):
         super().__init__()
-        self.network = nn.Sequential(nn.Linear(ROWS * COLS, 128), nn.ReLU(),
-                                     nn.Linear(128, 128), nn.ReLU(),
-                                     nn.Linear(128, COLS))
+        dims, layers = [CFG["n_in"], *CFG["hidden"]], []
+        for a, b in zip(dims, dims[1:]):
+            layers += [nn.Linear(a, b), nn.ReLU()]
+        layers.append(nn.Linear(dims[-1], COLS))
+        self.network = nn.Sequential(*layers)
 
     def forward(self, x):
         return self.network(x)
@@ -46,7 +64,7 @@ def greedy_action(model, board, piece, epsilon=0.0):
     valid = get_valid_locations(board)
     if random.random() < epsilon:
         return random.choice(valid)
-    x = torch.as_tensor(encode_state(board, piece), dtype=torch.float32, device=DEVICE).unsqueeze(0)
+    x = torch.as_tensor(CFG["encode"](board, piece), dtype=torch.float32, device=DEVICE).unsqueeze(0)
     with torch.no_grad():
         q = model(x).squeeze(0).cpu().numpy()
     return max(valid, key=lambda c: q[c])
@@ -93,15 +111,17 @@ def load_model(path):
     return model, ckpt
 
 
-def export_npz(pth, npz=WEB):
+def export_npz(pth, npz=None):
+    npz = npz or WEB
     os.makedirs(os.path.dirname(npz), exist_ok=True)
     _, ckpt = load_model(pth)
     sd = ckpt["model_state_dict"] if "model_state_dict" in ckpt else ckpt
     g = lambda k: sd[k].detach().cpu().numpy().astype(np.float32)
     tmp = f"{npz}.{os.getpid()}.tmp.npz"
-    np.savez(tmp, w0=g("network.0.weight"), b0=g("network.0.bias"), w1=g("network.2.weight"),
-             b1=g("network.2.bias"), w2=g("network.4.weight"), b2=g("network.4.bias"),
-             training_steps=ckpt.get("training_steps", 0), epsilon=ckpt.get("epsilon", 0.0),
+    arrays = {}
+    for i in range(len(CFG["hidden"]) + 1):          # Linear layers sit at network.0, .2, .4, ...
+        arrays[f"w{i}"], arrays[f"b{i}"] = g(f"network.{2 * i}.weight"), g(f"network.{2 * i}.bias")
+    np.savez(tmp, **arrays, training_steps=ckpt.get("training_steps", 0), epsilon=ckpt.get("epsilon", 0.0),
              episodes=ckpt.get("episodes", 0))
     if _safe_replace(tmp, npz):
         print(f"Exported {pth} -> {npz}")
@@ -169,7 +189,7 @@ def run_episode(tr, opponent):
     if me == AI:                                   # opponent (Red) moves first
         make_move(board, opponent(board, other), other)
     while True:
-        s = encode_state(board, me)
+        s = CFG["encode"](board, me)
         a = greedy_action(tr.model, board, me, tr.eps)
         make_move(board, a, me)
         if winning_move(board, me): r, done = 1.0, True
@@ -179,7 +199,7 @@ def run_episode(tr, opponent):
             if winning_move(board, other): r, done = -1.0, True
             elif is_draw(board): r, done = 0.0, True
             else: r, done = 0.0, False
-        tr.memory.append((s, a, r, encode_state(board, me), float(done)))
+        tr.memory.append((s, a, r, CFG["encode"](board, me), float(done)))
         tr.optimize()
         if done:
             return r
@@ -198,7 +218,7 @@ def play_game(pick_red, pick_yellow, show=False):
 
 
 def evaluate(model, games=10):
-    """Greedy model vs Random, Alpha-Beta(d=2), and Alpha-Beta(d=4). Returns a score in [0, 3]."""
+    """Greedy model vs Random, Alpha-Beta(d=1), and Alpha-Beta(d=2). Returns a score in [0, 3]."""
     dqn = lambda b, p: greedy_action(model, b, p)
     total = 0.0
     benchmarks = [("Random", "Random", 1), ("AB-d1", "Alpha-Beta", 1), ("AB-d2", "Alpha-Beta", 2)]
@@ -326,7 +346,11 @@ def main():
     pl.add_argument("--show", action="store_true", help="print boards for bot-vs-bot games")
     e = sub.add_parser("export", help="convert a .pth checkpoint to the website's .npz")
     e.add_argument("--model", default=None)
+    for sp in (t, pl, e):
+        sp.add_argument("--arch", choices=["v1", "v2"], default="v1",
+                        help="v1 = original model, v2 = 4-in-a-row features + deeper network (separate files)")
     a = p.parse_args()
+    use_arch(a.arch)
     if a.cmd == "train": cmd_train(a)
     elif a.cmd == "play": cmd_play(a)
     else: export_npz(a.model or (BEST if os.path.exists(BEST) else LATEST))
