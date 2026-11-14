@@ -1,0 +1,36 @@
+{
+    "type": "bar",
+    "title": "GA-Tuned vs Hand-Tuned Weights Evaluation",
+    "labels": [
+        "Depth 2",
+        "Depth 3"
+    ],
+    "datasets": [
+        {
+            "label": "GA Wins",
+            "data": [
+                10,
+                7
+            ],
+            "colors": "#1f77b4"
+        },
+        {
+            "label": "Hand Wins",
+            "data": [
+                10,
+                12
+            ],
+            "colors": "#ff7f0e"
+        },
+        {
+            "label": "Draws",
+            "data": [
+                0,
+                1
+            ],
+            "colors": "#2ca02c"
+        }
+    ],
+    "x_label": "Search Depth",
+    "y_label": "Number of Games"
+}

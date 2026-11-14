@@ -1,0 +1,40 @@
+{
+    "type": "bar",
+    "title": "Iterative Deepening vs Traditional AI Algorithms",
+    "labels": [
+        "Random",
+        "Minimax",
+        "Alpha-Beta"
+    ],
+    "datasets": [
+        {
+            "label": "Wins",
+            "data": [
+                6,
+                3,
+                3
+            ],
+            "colors": "#1f77b4"
+        },
+        {
+            "label": "Losses",
+            "data": [
+                0,
+                3,
+                3
+            ],
+            "colors": "#ff7f0e"
+        },
+        {
+            "label": "Draws",
+            "data": [
+                0,
+                0,
+                0
+            ],
+            "colors": "#2ca02c"
+        }
+    ],
+    "x_label": "Opponent",
+    "y_label": "Number of Games"
+}
