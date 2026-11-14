@@ -12,7 +12,7 @@ Files written to models/:
   dqn_connect4_best.pth  best checkpoint by evaluation vs Random / Alpha-Beta
   dqn_connect4.npz       weights for the website (NumPy only, no torch at serving time)
 """
-import argparse, copy, os, random, time
+import argparse, copy, os, random, shutil, time
 from collections import deque
 import numpy as np
 import torch, torch.nn as nn, torch.optim as optim
@@ -27,7 +27,7 @@ BEST = f"{MODEL_DIR}/dqn_connect4_best.pth"
 WEB = f"{MODEL_DIR}/dqn_connect4.npz"
 
 GAMMA, EPS_START, EPS_MIN, EPS_DECAY = 0.99, 1.0, 0.05, 0.9995   # epsilon decays per episode
-BATCH, LR, TARGET_UPDATE, MEMORY = 64, 1e-3, 500, 50000
+BATCH, WARMUP, LR, TARGET_UPDATE, MEMORY = 64, 1000, 1e-3, 500, 50000
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -53,14 +53,34 @@ def greedy_action(model, board, piece, epsilon=0.0):
 
 
 # ------------------------------------------------------------------ checkpoints
+def _safe_replace(tmp, path):
+    """Replace path with tmp, retrying on transient Windows file locks (WinError 5 / 32)."""
+    for attempt in range(15):
+        try:
+            os.replace(tmp, path)
+            return True
+        except PermissionError:
+            time.sleep(0.05 * (attempt + 1))
+    try:
+        shutil.copyfile(tmp, path)
+        os.remove(tmp)
+        return True
+    except OSError as e:
+        print(f"   [warn] Could not overwrite {path} (locked by Windows): {e}")
+        return False
+
+
 def save_checkpoint(path, trainer):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
+    tmp = f"{path}.{os.getpid()}.tmp"
     torch.save({"model_state_dict": trainer.model.state_dict(),
                 "target_state_dict": trainer.target.state_dict(),
                 "optimizer_state_dict": trainer.opt.state_dict(),
-                "training_steps": trainer.steps, "epsilon": trainer.eps, "episodes": trainer.episodes}, tmp)
-    os.replace(tmp, path)                  # atomic: a crash never leaves a half-written model
+                "training_steps": trainer.steps,
+                "epsilon": trainer.eps,
+                "episodes": trainer.episodes,
+                "best_score": trainer.best_score}, tmp)
+    _safe_replace(tmp, path)
 
 
 def load_model(path):
@@ -74,14 +94,17 @@ def load_model(path):
 
 
 def export_npz(pth, npz=WEB):
+    os.makedirs(os.path.dirname(npz), exist_ok=True)
     _, ckpt = load_model(pth)
     sd = ckpt["model_state_dict"] if "model_state_dict" in ckpt else ckpt
     g = lambda k: sd[k].detach().cpu().numpy().astype(np.float32)
-    np.savez(npz, w0=g("network.0.weight"), b0=g("network.0.bias"), w1=g("network.2.weight"),
+    tmp = f"{npz}.{os.getpid()}.tmp.npz"
+    np.savez(tmp, w0=g("network.0.weight"), b0=g("network.0.bias"), w1=g("network.2.weight"),
              b1=g("network.2.bias"), w2=g("network.4.weight"), b2=g("network.4.bias"),
              training_steps=ckpt.get("training_steps", 0), epsilon=ckpt.get("epsilon", 0.0),
              episodes=ckpt.get("episodes", 0))
-    print(f"Exported {pth} -> {npz}")
+    if _safe_replace(tmp, npz):
+        print(f"Exported {pth} -> {npz}")
 
 
 # ------------------------------------------------------------------ training
@@ -93,6 +116,7 @@ class Trainer:
         self.loss_fn = nn.SmoothL1Loss()
         self.memory = deque(maxlen=MEMORY)
         self.eps, self.steps, self.episodes = EPS_START, 0, 0
+        self.best_score = -1.0
 
     def load(self, path):
         ckpt = torch.load(path, map_location=DEVICE, weights_only=True)
@@ -102,18 +126,22 @@ class Trainer:
             self.opt.load_state_dict(ckpt["optimizer_state_dict"])
         self.eps = ckpt.get("epsilon", EPS_START)
         self.steps, self.episodes = ckpt.get("training_steps", 0), ckpt.get("episodes", 0)
+        self.best_score = ckpt.get("best_score", -1.0)
 
     def optimize(self):
-        if len(self.memory) < BATCH:
+        if len(self.memory) < max(BATCH, WARMUP):
             return
         s, a, r, ns, d = zip(*random.sample(self.memory, BATCH))
         t = lambda x, dt=torch.float32: torch.as_tensor(np.array(x), dtype=dt, device=DEVICE)
         s, ns, r, d, a = t(s), t(ns), t(r), t(d), t(a, torch.int64)
         q = self.model(s).gather(1, a.unsqueeze(1)).squeeze(1)
         with torch.no_grad():
-            nq = self.target(ns)
-            nq[ns[:, (ROWS - 1) * COLS:] != 0] = -1e9          # top row occupied -> column is full
-            y = r + GAMMA * nq.max(1).values * (1 - d)
+            # Double DQN: online network selects best valid next column, target network evaluates it
+            full_mask = ns[:, (ROWS - 1) * COLS:] != 0     # top row occupied -> column is full
+            next_q_online = self.model(ns).masked_fill(full_mask, -1e9)
+            best_next_a = next_q_online.argmax(dim=1, keepdim=True)
+            next_q_target = self.target(ns).gather(1, best_next_a).squeeze(1)
+            y = r + GAMMA * next_q_target * (1 - d)
         loss = self.loss_fn(q, y)
         self.opt.zero_grad()
         loss.backward()
@@ -131,7 +159,7 @@ def make_opponent(kind, trainer):
         depth = int(kind[9:] or 1)
         return lambda b, p: get_move(b, p, "Alpha-Beta", depth)["column"]
     if kind == "self":
-        return lambda b, p: greedy_action(trainer.model, b, p, 0.1)
+        return lambda b, p: greedy_action(trainer.target, b, p, 0.1)
     raise SystemExit(f"Unknown opponent '{kind}'")
 
 
@@ -169,19 +197,20 @@ def play_game(pick_red, pick_yellow, show=False):
         turn = AI if turn == PLAYER else PLAYER
 
 
-def evaluate(model, games=20):
-    """Greedy model vs Random and Alpha-Beta(depth 1), colours alternating. Returns a score in [0, 2]."""
+def evaluate(model, games=10):
+    """Greedy model vs Random, Alpha-Beta(d=2), and Alpha-Beta(d=4). Returns a score in [0, 3]."""
     dqn = lambda b, p: greedy_action(model, b, p)
     total = 0.0
-    for name in ("Random", "Alpha-Beta"):
-        opp = lambda b, p, n=name: get_move(b, p, n, 1)["column"]
+    benchmarks = [("Random", "Random", 1), ("AB-d1", "Alpha-Beta", 1), ("AB-d2", "Alpha-Beta", 2)]
+    for label, algo, depth in benchmarks:
+        opp = lambda b, p, al=algo, dp=depth: get_move(b, p, al, dp)["column"]
         pts = 0.0
         for g in range(games):
             as_red = g % 2 == 0
             w = play_game(dqn if as_red else opp, opp if as_red else dqn)
             me = PLAYER if as_red else AI
             pts += 1.0 if w == me else 0.5 if w == 0 else 0.0
-        print(f"   eval vs {name:<10}: {pts / games:.0%}", end="")
+        print(f"   eval vs {label:<7}: {pts / games:.0%}", end="")
         total += pts / games
     print()
     return total
@@ -189,34 +218,51 @@ def evaluate(model, games=20):
 
 def cmd_train(a):
     tr = Trainer()
+    leftover_tmp = LATEST + ".tmp"
+    if a.resume and os.path.exists(leftover_tmp):
+        if not os.path.exists(LATEST) or os.path.getmtime(leftover_tmp) > os.path.getmtime(LATEST):
+            _safe_replace(leftover_tmp, LATEST)
+            print(f"Recovered newer checkpoint from {leftover_tmp}")
+
     if a.resume and os.path.exists(LATEST):
-        tr.load(LATEST)
-        print(f"Resumed from {LATEST} (episodes={tr.episodes}, steps={tr.steps}, epsilon={tr.eps:.3f})")
-    best, t0 = -1.0, time.time()
+        # Load from BEST if it exists so we fine-tune our strongest model
+        resume_path = BEST if os.path.exists(BEST) else LATEST
+        tr.load(resume_path)
+        tr.model.eval()
+        tr.best_score = evaluate(tr.model, a.eval_games)
+        tr.model.train()
+        # Bump epsilon to at least 0.30 on resume so it explores new lines vs Depth 4
+        tr.eps = max(tr.eps, a.resume_eps)
+        print(f"Resumed from {resume_path} (episodes={tr.episodes}, steps={tr.steps}, "
+              f"epsilon={tr.eps:.3f}, baseline_score={tr.best_score:.2f}/3.00)")
+
+    t0 = time.time()
     try:
         for i in range(1, a.episodes + 1):
             if a.minutes and time.time() - t0 > a.minutes * 60:
                 print(f"Time limit of {a.minutes} minutes reached - stopping.")
                 break
             kind = a.opponent if a.opponent != "mixed" else random.choices(
-                ["random", "self", "alphabeta1", "alphabeta2"], [0.3, 0.4, 0.2, 0.1])[0]
+                ["random", "self", "alphabeta1", "alphabeta2"],
+                [0.15, 0.35, 0.25, 0.25])[0]
             run_episode(tr, make_opponent(kind, tr))
             tr.eps, tr.episodes = max(EPS_MIN, tr.eps * EPS_DECAY), tr.episodes + 1
             if i % a.eval_every == 0:
                 tr.model.eval()
                 score = evaluate(tr.model, a.eval_games)
                 tr.model.train()
-                print(f"[{i}/{a.episodes}] eps={tr.eps:.3f} steps={tr.steps} score={score:.2f} ({time.time() - t0:.0f}s)")
-                if score > best:
-                    best = score
+                print(f"[{i}/{a.episodes}] eps={tr.eps:.3f} steps={tr.steps} score={score:.2f}/3.00 ({time.time() - t0:.0f}s)")
+                if score > tr.best_score:
+                    tr.best_score = score
                     save_checkpoint(BEST, tr)
             if i % a.save_every == 0:
                 save_checkpoint(LATEST, tr)
     except KeyboardInterrupt:
         print("\nInterrupted - saving progress...")
-    save_checkpoint(LATEST, tr)
-    export_npz(BEST if os.path.exists(BEST) else LATEST)
-    print(f"Saved {LATEST}" + (f", {BEST}" if os.path.exists(BEST) else "") + f", {WEB}")
+    finally:
+        save_checkpoint(LATEST, tr)
+        export_npz(BEST if os.path.exists(BEST) else LATEST)
+        print(f"Saved {LATEST}" + (f", {BEST}" if os.path.exists(BEST) else "") + f", {WEB}")
 
 
 # ------------------------------------------------------------------ play (no learning)
@@ -264,11 +310,12 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
     t = sub.add_parser("train", help="learning mode")
     t.add_argument("--episodes", type=int, default=5000)
-    t.add_argument("--opponent", default="mixed", help="mixed | random | self | alphabeta1 | alphabeta2")
+    t.add_argument("--opponent", default="mixed", help="mixed | random | self | alphabeta1..4")
     t.add_argument("--resume", action="store_true")
+    t.add_argument("--resume-eps", type=float, default=0.30, help="min epsilon when resuming to allow exploration")
     t.add_argument("--minutes", type=float, default=None, help="stop training after this many minutes")
     t.add_argument("--eval-every", type=int, default=500)
-    t.add_argument("--eval-games", type=int, default=20)
+    t.add_argument("--eval-games", type=int, default=10)
     t.add_argument("--save-every", type=int, default=250)
     pl = sub.add_parser("play", help="playing mode (no learning)")
     pl.add_argument("--opponent", default="human", choices=["human", "random", "minimax", "alphabeta"])
