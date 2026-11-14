@@ -134,7 +134,8 @@ function setMode(m){$("tab-hva").classList.toggle("on",m==="hva");$("tab-ava").c
  [...$("cols").children].forEach((b,c)=>b.onclick=()=>humanClick(c));
  $("board").innerHTML=Array.from({length:R*C},(_,i)=>`<div class="cell" data-c="${i%C}"></div>`).join("");
  [...$("board").children].forEach(el=>el.onclick=()=>humanClick(+el.dataset.c));
- try{AG=await (await fetch("/api/agents")).json()}catch(e){AG=[{id:"Random",label:"Random",available:true},{id:"DQN",label:"Trained DQN",available:false}];S.notice="Could not reach the API."}
+ try{const r=await fetch("/api/agents");const j=await r.json().catch(()=>null);if(!r.ok||!Array.isArray(j))throw new Error((j&&j.error)||"API returned HTTP "+r.status+" (open /api/health to see why)");AG=j}
+ catch(e){AG=[{id:"Random",label:"Random",available:true},{id:"Minimax",label:"Minimax",depth:4,available:true},{id:"Alpha-Beta",label:"Alpha-Beta",depth:5,available:true},{id:"DQN",label:"Trained DQN",available:false}];S.notice="API problem: "+e.message}
  fillSelects();
  $("tab-hva").onclick=()=>setMode("hva");$("tab-ava").onclick=()=>setMode("ava");
  $("new-hva").onclick=startHva;$("undo").onclick=undo;
