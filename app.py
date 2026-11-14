@@ -15,11 +15,14 @@ except Exception as e:          # report the real cause through the API instead 
 
 app = Flask(__name__)
 
-PUBLIC = os.path.join(ROOT, "public")
+PUBLIC      = os.path.join(ROOT, "public")
+GA_PATH     = os.path.join(ROOT, "models", "ga_weights.json")
 # Max search depth per algorithm (keeps pure-Python search within serverless time limits)
-MAX_DEPTH = {"Minimax": 4, "Alpha-Beta": 5, "Alpha-Beta + Move Ordering": 6, "Alpha-Beta + Move Ordering + TT": 6}
+MAX_DEPTH = {"Minimax": 4, "Alpha-Beta": 5, "Alpha-Beta + Move Ordering": 6,
+             "Alpha-Beta + Move Ordering + TT": 6, "Iterative Deepening": 6, "Genetic (Tuned)": 5}
 MODEL_FILES = {"DQN": "dqn_connect4.npz", "DQN v2": "dqn_connect4_v2.npz"}
 _models = {}                                         # name -> {"m": model or None, "error": str or None}
+_ga    = {"w": None, "meta": None, "error": None}
 
 
 def _ls(p):
@@ -39,6 +42,22 @@ def get_model(name="DQN"):
     return s["m"]
 
 
+def get_ga_weights():
+    if _ga["w"] is None and os.path.isfile(GA_PATH):
+        try:
+            import json
+            with open(GA_PATH) as f:
+                data = json.load(f)
+            _ga["w"]    = data["weights"]
+            _ga["meta"] = {k: data[k] for k in ("fitness", "pop_size", "generations",
+                                                  "games_per_fitness", "search_depth")
+                           if k in data}
+        except Exception as e:
+            _ga["error"] = f"{type(e).__name__}: {e}"
+            print("Could not load GA weights:", _ga["error"])
+    return _ga["w"]
+
+
 @app.get("/api/health")
 def health():
     return jsonify(python=sys.version, root=ROOT, root_files=_ls(ROOT), c4_files=_ls(os.path.join(ROOT, "c4")),
@@ -55,6 +74,7 @@ def _guard():
 @app.get("/api/agents")
 def agents():
     m, m2 = get_model("DQN"), get_model("DQN v2")
+    gw = get_ga_weights()
     return jsonify([
         {"id": "Random", "label": "Random", "depth": None, "available": True},
         {"id": "Minimax", "label": "Minimax", "depth": MAX_DEPTH["Minimax"], "available": True},
@@ -63,6 +83,11 @@ def agents():
          "depth": MAX_DEPTH["Alpha-Beta + Move Ordering"], "available": True},
         {"id": "Alpha-Beta + Move Ordering + TT", "label": "Alpha-Beta + Move Ordering + TT",
          "depth": MAX_DEPTH["Alpha-Beta + Move Ordering + TT"], "available": True},
+        {"id": "Iterative Deepening", "label": "Iterative Deepening (IDDLS)",
+         "depth": MAX_DEPTH["Iterative Deepening"], "available": True},
+        {"id": "Genetic (Tuned)", "label": "Genetic (Tuned weights)",
+         "depth": MAX_DEPTH["Genetic (Tuned)"], "available": gw is not None,
+         "info": _ga["meta"], "error": _ga["error"]},
         {"id": "DQN", "label": "Trained DQN", "depth": None, "available": m is not None,
          "info": m.meta if m else None},
         {"id": "DQN v2", "label": "Trained DQN v2 (4-in-a-row features)", "depth": None, "available": m2 is not None,
@@ -89,6 +114,11 @@ def ai_move():
             if m is None:
                 return jsonify(error=f"No trained '{agent}' model file found in models/."), 503
             res = dqn_move(m, board, piece)
+        elif agent == "Genetic (Tuned)":
+            w = get_ga_weights()
+            if w is None:
+                return jsonify(error="No GA weights found. Run: python ga_train.py"), 503
+            res = get_move(board, piece, agent, max(1, min(depth, MAX_DEPTH["Genetic (Tuned)"])), weights=w)
         elif agent in ALGORITHMS:
             res = get_move(board, piece, agent, max(1, min(depth, MAX_DEPTH.get(agent, depth))))
         else:

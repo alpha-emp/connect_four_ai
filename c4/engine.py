@@ -70,6 +70,46 @@ def score_position(board, piece):
             score += evaluate_window([board[r - i][c + i] for i in range(4)], piece)
     return score
 
+def score_position_w(board, piece, w):
+    """Weighted version of score_position with learnable coefficients w = [center, two, three, block].
+    When w = [6, 5, 10, 12] the result is identical to score_position."""
+    center_w, two_w, three_w, block_w = w
+    opp = PLAYER if piece == AI else AI
+    score = list(board[:, COLS // 2]).count(piece) * center_w
+    for r in range(ROWS):
+        for c in range(COLS - 3):
+            window = list(board[r, c:c + 4])
+            mine, theirs, empty = window.count(piece), window.count(opp), window.count(EMPTY)
+            if mine == 4:                      score += 100
+            elif mine == 3 and empty == 1:     score += three_w
+            elif mine == 2 and empty == 2:     score += two_w
+            if theirs == 3 and empty == 1:     score -= block_w
+    for c in range(COLS):
+        for r in range(ROWS - 3):
+            window = list(board[r:r + 4, c])
+            mine, theirs, empty = window.count(piece), window.count(opp), window.count(EMPTY)
+            if mine == 4:                      score += 100
+            elif mine == 3 and empty == 1:     score += three_w
+            elif mine == 2 and empty == 2:     score += two_w
+            if theirs == 3 and empty == 1:     score -= block_w
+    for r in range(ROWS - 3):
+        for c in range(COLS - 3):
+            window = [board[r + i][c + i] for i in range(4)]
+            mine, theirs, empty = window.count(piece), window.count(opp), window.count(EMPTY)
+            if mine == 4:                      score += 100
+            elif mine == 3 and empty == 1:     score += three_w
+            elif mine == 2 and empty == 2:     score += two_w
+            if theirs == 3 and empty == 1:     score -= block_w
+    for r in range(3, ROWS):
+        for c in range(COLS - 3):
+            window = [board[r - i][c + i] for i in range(4)]
+            mine, theirs, empty = window.count(piece), window.count(opp), window.count(EMPTY)
+            if mine == 4:                      score += 100
+            elif mine == 3 and empty == 1:     score += three_w
+            elif mine == 2 and empty == 2:     score += two_w
+            if theirs == 3 and empty == 1:     score -= block_w
+    return score
+
 
 # ---------------- search AIs ----------------
 def random_ai_move(board):
@@ -144,10 +184,52 @@ def _search_ordered(board, depth, alpha, beta, maximizing, counter, tt):
         tt[key] = (value, UPPER if value <= alpha0 else LOWER if value >= beta else EXACT, best)
     return best, value
 
-ALGORITHMS = ("Random", "Minimax", "Alpha-Beta", "Alpha-Beta + Move Ordering", "Alpha-Beta + Move Ordering + TT")
 
-def get_move(board, piece, algorithm, depth=4):
-    """Move for either colour. Returns dict(column, score, nodes, time)."""
+# ---- Iterative Deepening Alpha-Beta (IDDLS) ----
+def _iddls(board, max_depth, counter):
+    """Iterative Deepening: runs Alpha-Beta + Move Ordering + TT from depth 1 up to max_depth,
+    keeping the best move from the deepest completed iteration."""
+    best_col = random.choice(get_valid_locations(board))
+    best_score = -math.inf
+    for d in range(1, max_depth + 1):
+        col, score = _search_ordered(board, d, -math.inf, math.inf, True, counter, {})
+        if col is not None:
+            best_col, best_score = col, score
+        if score >= WIN_SCORE:          # forced win found — no need to go deeper
+            break
+    return best_col, best_score
+
+
+# ---- Alpha-Beta with learnable weights (used by the Genetic (Tuned) agent) ----
+def _ab_weighted(board, depth, alpha, beta, maximizing, counter, w):
+    """Alpha-Beta with move ordering and weighted evaluation. `w` = [center, two, three, block]."""
+    counter[0] += 1
+    valid = get_valid_locations(board)
+    if winning_move(board, AI):     return None, WIN_SCORE
+    if winning_move(board, PLAYER): return None, -WIN_SCORE
+    if not valid:                   return None, 0
+    if depth == 0:                  return None, score_position_w(board, AI, w)
+    order = [c for c in CENTER_ORDER if c in valid]
+    piece = AI if maximizing else PLAYER
+    value, best = (-math.inf if maximizing else math.inf), order[0]
+    for col in order:
+        child = board.copy()
+        drop_piece(child, get_next_open_row(child, col), col, piece)
+        s = _ab_weighted(child, depth - 1, alpha, beta, not maximizing, counter, w)[1]
+        if maximizing and s > value: value, best = s, col
+        if not maximizing and s < value: value, best = s, col
+        if maximizing: alpha = max(alpha, value)
+        else:          beta  = min(beta, value)
+        if alpha >= beta: break
+    return best, value
+
+
+ALGORITHMS = ("Random", "Minimax", "Alpha-Beta", "Alpha-Beta + Move Ordering",
+              "Alpha-Beta + Move Ordering + TT", "Iterative Deepening", "Genetic (Tuned)")
+
+def get_move(board, piece, algorithm, depth=4, weights=None):
+    """Move for either colour. Returns dict(column, score, nodes, time).
+    `weights` is required when algorithm == 'Genetic (Tuned)'."""
     b = board.copy() if piece == AI else swap_perspective(board)
     counter, t0 = [0], time.perf_counter()
     if algorithm == "Random":
@@ -160,6 +242,12 @@ def get_move(board, piece, algorithm, depth=4):
         col, score = _search_ordered(b, depth, -math.inf, math.inf, True, counter, None)
     elif algorithm == "Alpha-Beta + Move Ordering + TT":
         col, score = _search_ordered(b, depth, -math.inf, math.inf, True, counter, {})
+    elif algorithm == "Iterative Deepening":
+        col, score = _iddls(b, depth, counter)
+    elif algorithm == "Genetic (Tuned)":
+        if weights is None:
+            raise ValueError("Genetic (Tuned) requires pre-trained weights. Run: python ga_train.py")
+        col, score = _ab_weighted(b, depth, -math.inf, math.inf, True, counter, weights)
     else:
         raise ValueError(f"Unknown algorithm: {algorithm}")
     return {"column": col, "score": score, "nodes": counter[0], "time": time.perf_counter() - t0}
