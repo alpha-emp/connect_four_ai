@@ -1,0 +1,40 @@
+{
+    "type": "bar",
+    "title": "DQN Agent vs Traditional AI Algorithms",
+    "labels": [
+        "Random",
+        "Minimax",
+        "Alpha-Beta"
+    ],
+    "datasets": [
+        {
+            "label": "Wins",
+            "data": [
+                5,
+                0,
+                0
+            ],
+            "colors": "#1f77b4"
+        },
+        {
+            "label": "Losses",
+            "data": [
+                1,
+                6,
+                6
+            ],
+            "colors": "#ff7f0e"
+        },
+        {
+            "label": "Draws",
+            "data": [
+                0,
+                0,
+                0
+            ],
+            "colors": "#2ca02c"
+        }
+    ],
+    "x_label": "Opponent",
+    "y_label": "Number of Games"
+}

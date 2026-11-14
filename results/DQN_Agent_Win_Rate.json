@@ -1,0 +1,24 @@
+{
+    "type": "bar",
+    "title": "DQN Agent Win Rate",
+    "labels": [
+        "Random",
+        "Minimax",
+        "Alpha-Beta"
+    ],
+    "datasets": [
+        {
+            "label": "Win Rate (%)",
+            "data": [
+                83.33333333333334,
+                0.0,
+                0.0
+            ],
+            "colors": [
+                "#1f77b4"
+            ]
+        }
+    ],
+    "x_label": "Opponent",
+    "y_label": "Win Rate (%)"
+}

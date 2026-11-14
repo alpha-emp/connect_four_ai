@@ -1,0 +1,11 @@
+Depth,Algorithm,Nodes,Time (seconds)
+3,Alpha-Beta,191.25,0.0258
+3,Alpha-Beta + Move Ordering,123.0,0.01666
+3,Alpha-Beta + Move Ordering + TT,123.0,0.01765
+3,Iterative Deepening,138.0,0.01941
+3,Minimax,394.5,0.05641
+4,Alpha-Beta,761.75,0.10382
+4,Alpha-Beta + Move Ordering,318.0,0.03909
+4,Alpha-Beta + Move Ordering + TT,318.0,0.04059
+4,Iterative Deepening,406.0,0.05095
+4,Minimax,2691.25,0.40258

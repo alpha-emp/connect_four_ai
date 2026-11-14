@@ -1,0 +1,4 @@
+Opponent,Wins,Losses,Draws,Win Rate (%),Draw Rate (%),Games
+Random,3,3,0,50.0,0.0,6
+Minimax,0,6,0,0.0,0.0,6
+Alpha-Beta,0,6,0,0.0,0.0,6
