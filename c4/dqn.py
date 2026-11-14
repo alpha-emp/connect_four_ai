@@ -1,165 +1,96 @@
-"""Game logic, heuristic and search AIs (ported from the notebook, no plotting/UI)."""
-import math, random, time
+"""NumPy-only DQN inference (no torch needed, so it fits on Vercel).
+Supports two saved models, detected from the weight shapes:
+  v1: 42 inputs  -> 128 -> 128 -> 7
+  v2: 222 inputs (board + 69 four-in-a-row windows + playable squares) -> 256 -> 256 -> 128 -> 7
+Weights are stored as w0,b0,w1,b1,... in an .npz written by `python dqn_train.py train/export`."""
+import re, time
 import numpy as np
-
-ROWS, COLS = 6, 7
-EMPTY, PLAYER, AI = 0, 1, 2          # PLAYER = Red (moves first), AI = Yellow
-WIN_SCORE = 100000
+from .engine import ROWS, COLS, EMPTY, get_valid_locations
 
 
-def create_board():
-    return np.zeros((ROWS, COLS), dtype=int)
+def encode_state(board, piece):
+    """v1 input. Board from `piece`'s point of view: own = 1, opponent = -1, empty = 0."""
+    s = np.zeros((ROWS, COLS), dtype=np.float32)
+    s[board == piece] = 1.0
+    s[(board != piece) & (board != EMPTY)] = -1.0
+    return s.flatten()
 
-def get_valid_locations(board):
-    return [c for c in range(COLS) if board[ROWS - 1][c] == EMPTY]
 
-def get_next_open_row(board, col):
-    for r in range(ROWS):
-        if board[r][col] == EMPTY:
-            return r
-
-def drop_piece(board, row, col, piece):
-    board[row][col] = piece
-
-def make_move(board, col, piece):
-    if col not in get_valid_locations(board):
-        return False
-    drop_piece(board, get_next_open_row(board, col), col, piece)
-    return True
-
-def find_win_cells(board, piece):
-    """Return the 4 (row, col) cells of a winning line for `piece`, or []."""
+def _windows():
+    """All 69 four-in-a-row lines as flat cell indices (24 horizontal, 21 vertical, 12 + 12 diagonal)."""
+    out = []
     for r in range(ROWS):
         for c in range(COLS):
             for dr, dc in ((0, 1), (1, 0), (1, 1), (-1, 1)):
                 cells = [(r + i * dr, c + i * dc) for i in range(4)]
-                if all(0 <= rr < ROWS and 0 <= cc < COLS and board[rr][cc] == piece for rr, cc in cells):
-                    return cells
-    return []
+                if all(0 <= y < ROWS and 0 <= x < COLS for y, x in cells):
+                    out.append([y * COLS + x for y, x in cells])
+    return np.array(out)
 
-def winning_move(board, piece):
-    return bool(find_win_cells(board, piece))
-
-def is_draw(board):
-    return not get_valid_locations(board)
+WINDOWS = _windows()                                   # shape (69, 4)
+N_FEATURES_V2 = ROWS * COLS + 2 * len(WINDOWS) + ROWS * COLS      # 42 + 138 + 42 = 222
 
 
-# ---------------- heuristic ----------------
-def evaluate_window(window, piece):
-    opp = PLAYER if piece == AI else AI
-    score = 0
-    if window.count(piece) == 4: score += 100
-    elif window.count(piece) == 3 and window.count(EMPTY) == 1: score += 10
-    elif window.count(piece) == 2 and window.count(EMPTY) == 2: score += 5
-    if window.count(opp) == 3 and window.count(EMPTY) == 1: score -= 12
-    return score
-
-def score_position(board, piece):
-    score = list(board[:, COLS // 2]).count(piece) * 6
-    for r in range(ROWS):
-        for c in range(COLS - 3):
-            score += evaluate_window(list(board[r, c:c + 4]), piece)
+def encode_state_v2(board, piece):
+    """v2 input: [board (own=1/opp=-1) | own pieces per window /4 | opp pieces per window /4 | playable squares].
+    The first 42 values are the v1 encoding, so 'column is full' is still readable from the top row."""
+    base = encode_state(board, piece)
+    own, opp = (base == 1).astype(np.float32), (base == -1).astype(np.float32)
+    playable = np.zeros(ROWS * COLS, dtype=np.float32)
+    heights = (board != EMPTY).sum(axis=0)
     for c in range(COLS):
-        for r in range(ROWS - 3):
-            score += evaluate_window(list(board[r:r + 4, c]), piece)
-    for r in range(ROWS - 3):
-        for c in range(COLS - 3):
-            score += evaluate_window([board[r + i][c + i] for i in range(4)], piece)
-    for r in range(3, ROWS):
-        for c in range(COLS - 3):
-            score += evaluate_window([board[r - i][c + i] for i in range(4)], piece)
-    return score
+        if heights[c] < ROWS:
+            playable[heights[c] * COLS + c] = 1.0      # the square a piece dropped in column c lands on
+    return np.concatenate([base, own[WINDOWS].sum(1) / 4, opp[WINDOWS].sum(1) / 4, playable]).astype(np.float32)
 
 
-# ---------------- search AIs ----------------
-def random_ai_move(board):
+ENCODERS = {ROWS * COLS: encode_state, N_FEATURES_V2: encode_state_v2}
+
+
+class NumpyDQN:
+    def __init__(self, params, meta=None):
+        n = 0
+        while f"w{n}" in params:
+            n += 1
+        if n < 2:
+            raise ValueError("Model file has no usable weights (expected w0,b0,w1,b1,...)")
+        prev = None
+        for i in range(n):
+            w, b = params[f"w{i}"], params.get(f"b{i}")
+            if b is None or w.ndim != 2 or b.shape != (w.shape[0],) or (prev is not None and w.shape[1] != prev):
+                raise ValueError(f"Bad shape for layer {i}")
+            if not (np.isfinite(w).all() and np.isfinite(b).all()):
+                raise ValueError(f"Layer {i} contains NaN/inf")
+            prev = w.shape[0]
+        n_in = params["w0"].shape[1]
+        if prev != COLS or n_in not in ENCODERS:
+            raise ValueError(f"Unsupported model (inputs={n_in}, outputs={prev})")
+        self.layers = [(params[f"w{i}"], params[f"b{i}"]) for i in range(n)]
+        self.encode = ENCODERS[n_in]
+        self.version = "v2" if n_in == N_FEATURES_V2 else "v1"
+        self.meta = dict(meta or {}, version=self.version)
+
+    @classmethod
+    def load(cls, path):
+        with np.load(path, allow_pickle=False) as z:
+            params = {k: z[k].astype(np.float32) for k in z.files if re.fullmatch(r"[wb]\d+", k)}
+            meta = {k: float(z[k]) for k in ("training_steps", "epsilon", "episodes") if k in z.files}
+        return cls(params, meta)
+
+    def q_values(self, state):
+        h = state
+        for i, (w, b) in enumerate(self.layers):
+            h = h @ w.T + b
+            if i < len(self.layers) - 1:
+                h = np.maximum(h, 0)
+        return h
+
+
+def dqn_move(model, board, piece):
+    """Greedy move with full columns masked; same result format as engine.get_move."""
+    t0 = time.perf_counter()
     valid = get_valid_locations(board)
-    return random.choice(valid) if valid else None
-
-def swap_perspective(board):
-    swapped = board.copy()
-    swapped[board == AI] = PLAYER
-    swapped[board == PLAYER] = AI
-    return swapped
-
-def _search(board, depth, alpha, beta, maximizing, counter, prune):
-    """Minimax (prune=False) / Alpha-Beta (prune=True). The searching side is always AI."""
-    counter[0] += 1
-    valid = get_valid_locations(board)
-    if winning_move(board, AI): return None, WIN_SCORE
-    if winning_move(board, PLAYER): return None, -WIN_SCORE
-    if not valid: return None, 0
-    if depth == 0: return None, score_position(board, AI)
-    piece = AI if maximizing else PLAYER
-    value, best = (-math.inf if maximizing else math.inf), random.choice(valid)
-    for col in valid:
-        child = board.copy()
-        drop_piece(child, get_next_open_row(child, col), col, piece)
-        s = _search(child, depth - 1, alpha, beta, not maximizing, counter, prune)[1]
-        if maximizing and s > value: value, best = s, col
-        if not maximizing and s < value: value, best = s, col
-        if prune:
-            if maximizing: alpha = max(alpha, value)
-            else: beta = min(beta, value)
-            if alpha >= beta: break
-    return best, value
-
-# ---- Alpha-Beta variants: move ordering, and move ordering + transposition table ----
-CENTER_ORDER = sorted(range(COLS), key=lambda c: abs(c - COLS // 2))      # [3, 2, 4, 1, 5, 0, 6]
-EXACT, LOWER, UPPER = 0, 1, 2
-
-def _search_ordered(board, depth, alpha, beta, maximizing, counter, tt):
-    """Alpha-Beta trying centre columns first. If `tt` (a dict) is given, also uses a transposition table."""
-    counter[0] += 1
-    alpha0, key, tt_col = alpha, None, None
-    if tt is not None:
-        key = (board.tobytes(), depth, maximizing)
-        hit = tt.get(key)
-        if hit:
-            val, flag, tt_col = hit
-            if flag == EXACT: return tt_col, val
-            if flag == LOWER: alpha = max(alpha, val)
-            else: beta = min(beta, val)
-            if alpha >= beta: return tt_col, val
-    valid = get_valid_locations(board)
-    if winning_move(board, AI): return None, WIN_SCORE
-    if winning_move(board, PLAYER): return None, -WIN_SCORE
-    if not valid: return None, 0
-    if depth == 0: return None, score_position(board, AI)
-    order = [c for c in CENTER_ORDER if c in valid]
-    if tt_col in order:                                   # best move from an earlier visit goes first
-        order.remove(tt_col); order.insert(0, tt_col)
-    piece = AI if maximizing else PLAYER
-    value, best = (-math.inf if maximizing else math.inf), order[0]
-    for col in order:
-        child = board.copy()
-        drop_piece(child, get_next_open_row(child, col), col, piece)
-        s = _search_ordered(child, depth - 1, alpha, beta, not maximizing, counter, tt)[1]
-        if maximizing and s > value: value, best = s, col
-        if not maximizing and s < value: value, best = s, col
-        if maximizing: alpha = max(alpha, value)
-        else: beta = min(beta, value)
-        if alpha >= beta: break
-    if tt is not None:
-        tt[key] = (value, UPPER if value <= alpha0 else LOWER if value >= beta else EXACT, best)
-    return best, value
-
-ALGORITHMS = ("Random", "Minimax", "Alpha-Beta", "Alpha-Beta + Move Ordering", "Alpha-Beta + Move Ordering + TT")
-
-def get_move(board, piece, algorithm, depth=4):
-    """Move for either colour. Returns dict(column, score, nodes, time)."""
-    b = board.copy() if piece == AI else swap_perspective(board)
-    counter, t0 = [0], time.perf_counter()
-    if algorithm == "Random":
-        col, score = random_ai_move(b), score_position(b, AI)
-    elif algorithm == "Minimax":
-        col, score = _search(b, depth, -math.inf, math.inf, True, counter, False)
-    elif algorithm == "Alpha-Beta":
-        col, score = _search(b, depth, -math.inf, math.inf, True, counter, True)
-    elif algorithm == "Alpha-Beta + Move Ordering":
-        col, score = _search_ordered(b, depth, -math.inf, math.inf, True, counter, None)
-    elif algorithm == "Alpha-Beta + Move Ordering + TT":
-        col, score = _search_ordered(b, depth, -math.inf, math.inf, True, counter, {})
-    else:
-        raise ValueError(f"Unknown algorithm: {algorithm}")
-    return {"column": col, "score": score, "nodes": counter[0], "time": time.perf_counter() - t0}
+    q = model.q_values(model.encode(board, piece))
+    col = max(valid, key=lambda c: q[c])
+    return {"column": int(col), "score": None, "nodes": None, "time": time.perf_counter() - t0,
+            "q_values": [float(v) for v in q], "valid": valid}
