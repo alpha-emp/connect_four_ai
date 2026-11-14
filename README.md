@@ -1,21 +1,22 @@
 # Connect Four AI
 
-A Connect Four web app and AI playground built with Python and Flask. It includes several search-based agents, a genetic algorithm optimizer, and trained DQN models for playing against the computer or watching AIs battle each other.
+A Connect Four web app and AI playground built with Python and Flask. It includes several search-based agents, a genetic algorithm optimizer, and trained DQN models for playing against the computer.
 
 ## Features
 
 - Human vs AI mode
 - AI vs AI mode with start, pause, next-move, and reset controls
-- Multiple agents:
+- 10 total AI agents:
   - Random
   - Minimax
   - Alpha-Beta
   - Alpha-Beta + Move Ordering
   - Alpha-Beta + Move Ordering + TT
-  - Iterative Deepening
-  - Genetic (Tuned) weights
-  - MCTS
-  - DQN and DQN v2
+  - Iterative Deepening (IDDFS)
+  - Genetic (Tuned weights)
+  - MCTS (Monte Carlo Tree Search)
+  - Trained DQN
+  - Trained DQN v2 (4-in-a-row features)
 - Stateless Flask API backend
 - Static HTML/JS frontend served from `public/`
 - Optional training scripts for DQN and genetic tuning
@@ -27,7 +28,7 @@ app.py                 Flask API and local entry point
 c4/
   __init__.py           Package marker
   engine.py             Core game logic, heuristics, and AI search algorithms
-  dqn.py                NumPy-based DQN inference and feature preprocessing
+dqn.py                NumPy-based DQN inference and feature preprocessing
 public/index.html      Frontend UI (HTML/CSS/JS)
 models/                Trained model weights and GA output
   ga_weights.json      Genetic algorithm tuned weights (created by ga_train.py)
@@ -73,6 +74,8 @@ http://localhost:5000
 The app serves the frontend at `/` and exposes the move API at `/api/ai_move` and health checks at `/api/health`.
 
 ## Agent overview
+
+This project includes 10 AI agents total across classical search and deep learning approaches.
 
 ### Classical search agents
 
@@ -192,4 +195,4 @@ This project is licensed under the MIT License. See `LICENSE` for details.
 
 ## Notes
 
-This repository mixes classical game-search approaches with machine-learning-based play, making it useful both as a game demo and as a research/experimentation playground for Connect Four strategies.
+This repository mixes classical game-search approaches with machine-learning-based play, making it useful both as a game demo and as a research/experimentation playground for Connect Four strategy.
